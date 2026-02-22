@@ -15,7 +15,9 @@
 //! multi-value parameters. The keys are **NEVER** automatically suffixed with
 //! `[]` when inserting values via [`IntoValues`].
 //!
-//! # Example
+//! # Examples
+//!
+//! Basic usage with the macro:
 //!
 //! ```rust
 //! use kv_pairs::{kv_pairs, KVPairs};
@@ -26,6 +28,46 @@
 //! ];
 //! assert_eq!(params.content.len(), 2);
 //! ```
+//!
+//! Optional parameters with `Option` (key omitted when `None`):
+//!
+//! ```rust
+//! use kv_pairs::kv_pairs;
+//!
+//! let p = kv_pairs![
+//!     "q" => Some("search"),
+//!     "filter" => None::<&str>,
+//! ];
+//! assert_eq!(p.content.len(), 1);
+//! assert_eq!(p.content[0], ("q", std::borrow::Cow::Borrowed("search")));
+//! ```
+//!
+//! Multiple values for one key (e.g. `tag=a&tag=b`) via slice or array:
+//!
+//! ```rust
+//! use kv_pairs::kv_pairs;
+//!
+//! let p = kv_pairs!["tag" => ["a", "b"].as_slice()];
+//! assert_eq!(p.content.len(), 2);
+//! assert_eq!(p.content[0].0, "tag"); // No auto-suffixed `[]` for slice values
+//! assert_eq!(p.content[0].1.as_ref(), "a");
+//! assert_eq!(p.content[1].1.as_ref(), "b");
+//!
+//! let p2 = kv_pairs!["x" => ["one", "two"]];
+//! assert_eq!(p2.content.len(), 2);
+//! ```
+//!
+//! Building programmatically with `push` and `push_one`:
+//!
+//! ```rust
+//! use kv_pairs::KVPairs;
+//!
+//! let mut p = KVPairs::new();
+//! p.push_one("k", "v");
+//! p.push("opt", Some(42_u32));
+//! p.push("tags", ["a", "b"].as_slice());
+//! assert_eq!(p.content.len(), 4);
+//! ```
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -33,7 +75,8 @@ extern crate alloc;
 
 use alloc::borrow::{Borrow, Cow};
 use alloc::string::{String, ToString};
-use alloc::vec::Vec;
+use alloc::vec::{IntoIter as VecIntoIter, Vec};
+use core::array::IntoIter as ArrayIntoIter;
 use core::iter::{once, Map, Once};
 use core::ops::{Deref, DerefMut, Index, IndexMut};
 use core::option::IntoIter as OptionIntoIter;
@@ -45,6 +88,19 @@ use serde::{Deserialize, Serialize};
 /// Internally a `Vec<(&str, Cow<str>)>`, supporting borrowed keys/values (zero allocation) and
 /// owned values when needed. Implements [`Serialize`]/[`Deserialize`] for use with serde (e.g.
 /// with `reqwest`’s `.query(&p.content)` or `.form(&p.content)`).
+///
+/// # Example
+///
+/// ```
+/// use kv_pairs::KVPairs;
+///
+/// let mut p = KVPairs::new();
+/// p.push_one("key", "value");
+/// p.push("optional", Some("v"));
+/// assert_eq!(p.len(), 2);
+/// ```
+///
+/// See the [crate documentation](crate) for more details.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(bound(deserialize = "'de: 'a"))]
 #[serde(transparent)]
@@ -53,7 +109,7 @@ pub struct KVPairs<'a> {
     pub content: Vec<KVPair<'a>>,
 }
 
-/// Type alias for the inner pair type, for use in trait bounds.
+/// Type alias for the inner pair type.
 pub type KVPair<'a> = (&'a str, Cow<'a, str>);
 
 #[doc(hidden)]
@@ -207,6 +263,17 @@ impl<'a, 'b> IntoIterator for &'b mut KVPairs<'a> {
 /// Converts a value into `Cow<'a, str>` for use with [`KVPairs::push_one`].
 ///
 /// Implemented for `&str`, `String`, `bool`, and common integer types; use the macros to implement for more types.
+///
+/// # Examples
+///
+/// ```
+/// use kv_pairs::IntoValue;
+///
+/// assert_eq!("hi".into_value().as_ref(), "hi");
+/// assert_eq!(String::from("owned").into_value().as_ref(), "owned");
+/// assert_eq!(true.into_value().as_ref(), "true");
+/// assert_eq!(42_u32.into_value().as_ref(), "42");
+/// ```
 pub trait IntoValue<'a> {
     /// Converts into a borrowed or owned string.
     fn into_value(self) -> Cow<'a, str>;
@@ -215,6 +282,26 @@ pub trait IntoValue<'a> {
 /// Yields an iterator of `Cow<'a, str>` for use with [`KVPairs::push`].
 ///
 /// For `Option<T>`, yields zero or one item (pair added only when `Some`); for `T: IntoValue`, yields one item.
+/// Also implemented for `&[T]`, `[T; N]`, `Vec<T>`, and `&Vec<T>` to add multiple pairs for one key.
+///
+/// # Examples
+///
+/// ```
+/// use kv_pairs::IntoValues;
+/// use std::borrow::Cow;
+///
+/// // Option yields 0 or 1 value
+/// let out: Vec<Cow<str>> = Some("x").into_values().collect();
+/// assert_eq!(out, vec![Cow::Borrowed("x")]);
+/// let out: Vec<Cow<str>> = None::<&str>.into_values().collect();
+/// assert!(out.is_empty());
+///
+/// // Slice yields one value per element
+/// let out: Vec<Cow<str>> = ["a", "b"].as_slice().into_values().collect();
+/// assert_eq!(out.len(), 2);
+/// assert_eq!(out[0].as_ref(), "a");
+/// assert_eq!(out[1].as_ref(), "b");
+/// ```
 pub trait IntoValues<'a> {
     /// Iterator over the string value(s).
     type Iter: Iterator<Item = Cow<'a, str>>;
@@ -226,6 +313,12 @@ pub trait IntoValues<'a> {
 impl<'a> IntoValue<'a> for &'a str {
     fn into_value(self) -> Cow<'a, str> {
         Cow::Borrowed(self)
+    }
+}
+
+impl<'a, 'b> IntoValue<'a> for &'b &'a str where 'a: 'b {
+    fn into_value(self) -> Cow<'a, str> {
+        Cow::Borrowed(*self)
     }
 }
 
@@ -271,6 +364,50 @@ where
 
     fn into_values(self) -> Self::Iter {
         self.iter().map(IntoValue::into_value)
+    }
+}
+
+impl<'a, T, const N: usize> IntoValues<'a> for &'a [T; N]
+where
+    &'a T: IntoValue<'a>,
+{
+    type Iter = Map<SliceIter<'a, T>, fn(&'a T) -> Cow<'a, str>>;
+
+    fn into_values(self) -> Self::Iter {
+        self.iter().map(IntoValue::into_value)
+    }
+}
+
+impl<'a, T> IntoValues<'a> for &'a Vec<T>
+where
+    &'a T: IntoValue<'a>,
+{
+    type Iter = Map<SliceIter<'a, T>, fn(&'a T) -> Cow<'a, str>>;
+
+    fn into_values(self) -> Self::Iter {
+        self.iter().map(IntoValue::into_value)
+    }
+}
+
+impl<'a, T, const N: usize> IntoValues<'a> for [T; N]
+where
+    T: IntoValue<'a>,
+{
+    type Iter = Map<ArrayIntoIter<T, N>, fn(T) -> Cow<'a, str>>;
+
+    fn into_values(self) -> Self::Iter {
+        self.into_iter().map(IntoValue::into_value)
+    }
+}
+
+impl<'a, T> IntoValues<'a> for Vec<T>
+where
+    T: IntoValue<'a>,
+{
+    type Iter = Map<VecIntoIter<T>, fn(T) -> Cow<'a, str>>;
+
+    fn into_values(self) -> Self::Iter {
+        self.into_iter().map(IntoValue::into_value)
     }
 }
 
@@ -334,6 +471,19 @@ macro_rules! impl_into_value_by_to_string {
 /// let empty: KVPairs = kv_pairs![];
 /// let one = kv_pairs![ "a" => "b" ];
 /// let two = kv_pairs![ "x" => 1_u32, "y" => "z" ];
+/// ```
+///
+/// With optional and multi-value params:
+///
+/// ```rust
+/// use kv_pairs::kv_pairs;
+///
+/// let p = kv_pairs![
+///     "q" => Some("query"),
+///     "page" => 1_u32,
+///     "tag" => ["a", "b"].as_slice(),
+/// ];
+/// assert_eq!(p.content.len(), 4);
 /// ```
 #[macro_export]
 macro_rules! kv_pairs {
@@ -460,6 +610,123 @@ mod tests {
         let none_val: Option<&str> = None;
         let out2: Vec<Cow<str>> = none_val.into_values().collect();
         assert!(out2.is_empty());
+    }
+
+    #[test]
+    fn into_value_str_string_bool() {
+        assert_eq!("hi".into_value().as_ref(), "hi");
+        assert_eq!(String::from("owned").into_value().as_ref(), "owned");
+        let s = String::from("borrowed");
+        assert_eq!((&s).into_value().as_ref(), "borrowed");
+        assert_eq!(true.into_value().as_ref(), "true");
+        assert_eq!(false.into_value().as_ref(), "false");
+    }
+
+    #[test]
+    fn into_value_integers() {
+        assert_eq!(0_u8.into_value().as_ref(), "0");
+        assert_eq!(1_u16.into_value().as_ref(), "1");
+        assert_eq!(42_u32.into_value().as_ref(), "42");
+        assert_eq!(100_u64.into_value().as_ref(), "100");
+        assert_eq!((-1_i8).into_value().as_ref(), "-1");
+        assert_eq!(2_i16.into_value().as_ref(), "2");
+        assert_eq!((-99_i32).into_value().as_ref(), "-99");
+        assert_eq!(1000_i64.into_value().as_ref(), "1000");
+    }
+
+    #[test]
+    fn into_values_slice() {
+        let out: Vec<Cow<str>> = ["a", "b"].as_slice().into_values().collect();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].as_ref(), "a");
+        assert_eq!(out[1].as_ref(), "b");
+    }
+
+    #[test]
+    fn into_values_array() {
+        let out: Vec<Cow<str>> = ["x", "y"].into_values().collect();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].as_ref(), "x");
+        assert_eq!(out[1].as_ref(), "y");
+    }
+
+    #[test]
+    fn into_values_vec() {
+        let out: Vec<Cow<str>> = vec!["p", "q"].into_values().collect();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].as_ref(), "p");
+        assert_eq!(out[1].as_ref(), "q");
+    }
+
+    #[test]
+    fn into_values_vec_ref() {
+        let v = vec!["m", "n"];
+        let out: Vec<Cow<str>> = (&v).into_values().collect();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].as_ref(), "m");
+        assert_eq!(out[1].as_ref(), "n");
+    }
+
+    #[test]
+    fn into_values_option_integers() {
+        let out: Vec<Cow<str>> = Some(10_u32).into_values().collect();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].as_ref(), "10");
+        let out: Vec<Cow<str>> = None::<u32>.into_values().collect();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn macro_with_option_some_none() {
+        let p = kv_pairs![
+            "q" => Some("search"),
+            "filter" => None::<&str>,
+        ];
+        assert_eq!(p.content.len(), 1);
+        assert_eq!(p.content[0].0, "q");
+        assert_eq!(p.content[0].1.as_ref(), "search");
+    }
+
+    #[test]
+    fn macro_with_slice() {
+        let p = kv_pairs!["tag" => ["a", "b"].as_slice()];
+        assert_eq!(p.content.len(), 2);
+        assert_eq!(p.content[0], ("tag", Cow::Borrowed("a")));
+        assert_eq!(p.content[1], ("tag", Cow::Borrowed("b")));
+    }
+
+    #[test]
+    fn macro_with_array() {
+        let p = kv_pairs!["x" => ["one", "two"]];
+        assert_eq!(p.content.len(), 2);
+        assert_eq!(p.content[0].1.as_ref(), "one");
+        assert_eq!(p.content[1].1.as_ref(), "two");
+    }
+
+    #[test]
+    fn macro_with_vec() {
+        let p = kv_pairs!["ids" => vec![1_u32, 2_u32]];
+        assert_eq!(p.content.len(), 2);
+        assert_eq!(p.content[0].1.as_ref(), "1");
+        assert_eq!(p.content[1].1.as_ref(), "2");
+    }
+
+    #[test]
+    fn push_with_slice_multi_value() {
+        let mut p = KVPairs::new();
+        p.push("tag", ["a", "b"].as_slice());
+        assert_eq!(p.content.len(), 2);
+        assert_eq!(p.content[0], ("tag", Cow::Borrowed("a")));
+        assert_eq!(p.content[1], ("tag", Cow::Borrowed("b")));
+    }
+
+    #[test]
+    fn push_with_vec_multi_value() {
+        let mut p = KVPairs::new();
+        p.push("n", vec![10_u32, 20_u32]);
+        assert_eq!(p.content.len(), 2);
+        assert_eq!(p.content[0].1.as_ref(), "10");
+        assert_eq!(p.content[1].1.as_ref(), "20");
     }
 
     #[test]

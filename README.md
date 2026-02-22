@@ -1,14 +1,15 @@
 # kv-pairs
 
-Generic key-value pair builder for API params and form data.
+[![Crates.io](https://img.shields.io/crates/v/kv-pairs)](https://crates.io/crates/kv-pairs)
+[![docs.rs](https://img.shields.io/docsrs/kv-pairs)](https://docs.rs/kv-pairs)
+[![License: MIT](https://img.shields.io/crates/l/kv-pairs)](LICENSE)
+[![CI](https://github.com/GeminiLab/kv-pairs/actions/workflows/ci.yml/badge.svg)](https://github.com/GeminiLab/kv-pairs/actions/workflows/ci.yml)
 
-This crate provides [`KVPairs`], an ordered collection of key-value pairs, whose values can be either borrowed or owned, that can be used as HTTP query strings or form bodies. The [`kv_pairs!`] macro can be used to build `KVPairs` instances with a literal-like syntax.
-
-`KVPairs` accepts values that implement [`IntoValue`], including most primitive and standard library types like `&str`, `String`, `bool`, and common integer types. The `impl_into_value_by_*` macros can be used to implement [`IntoValue`] for more types.
-
-`KVPairs` also accepts values that implement [`IntoValues`], to insert 0, 1, or more values for a single key. This is useful for optional or multi-value parameters. The keys are **never** automatically suffixed with `[]` when inserting values via [`IntoValues`].
+Key-value pair builder for API query strings and form data. Ordered, supports borrowed or owned values, and works with serde/reqwest.
 
 ## Example
+
+### Basic usage
 
 ```rust
 use kv_pairs::{kv_pairs, KVPairs};
@@ -20,9 +21,26 @@ let params = kv_pairs![
 assert_eq!(params.content.len(), 2);
 ```
 
-## no_std
+### Optional and multi-value params
 
-This crate supports `no_std` with the `alloc` crate. Disable the default `std` feature:
+```rust
+use kv_pairs::{kv_pairs, KVPairs};
+
+// Option: omit key when None
+let p = kv_pairs![
+    "q" => Some("search"),
+    "filter" => None::<&str>,
+];
+
+// Multiple values for one key (e.g. tags[]=a&tags[]=b)
+let p = kv_pairs![
+    "tags[]" => ["a", "b"].as_slice(),
+];
+```
+
+### no_std
+
+Disable the default `std` feature to use this crate in `no_std` environments.
 
 ```toml
 kv-pairs = { version = "0.1", default-features = false }
@@ -30,4 +48,4 @@ kv-pairs = { version = "0.1", default-features = false }
 
 ## License
 
-MIT
+The MIT License (MIT).
