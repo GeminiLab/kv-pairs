@@ -316,7 +316,10 @@ impl<'a> IntoValue<'a> for &'a str {
     }
 }
 
-impl<'a, 'b> IntoValue<'a> for &'b &'a str where 'a: 'b {
+impl<'a, 'b> IntoValue<'a> for &'b &'a str
+where
+    'a: 'b,
+{
     fn into_value(self) -> Cow<'a, str> {
         Cow::Borrowed(*self)
     }
@@ -746,8 +749,9 @@ mod tests {
         let c = kv_pairs!["x" => "1"];
         assert_eq!(a, b);
         assert_ne!(a, c);
+        use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        let mut hasher = std::hash::DefaultHasher::new();
+        let mut hasher = DefaultHasher::new();
         a.hash(&mut hasher);
         let _ = hasher.finish();
     }
