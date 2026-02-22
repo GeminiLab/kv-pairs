@@ -1,0 +1,22 @@
+[package]
+name = "kv-pairs"
+version = "0.1.0"
+edition = "2021"
+authors = ["aarkegz <aarkegz@gmail.com>"]
+description = "Generic key-value pair builder for API params/data"
+license = "MIT"
+repository = "https://github.com/GeminiLab/kv-pairs"
+keywords = ["kv", "key-value", "query-string", "form-data", "http"]
+categories = ["web-programming::http-client", "data-structures"]
+readme = "README.md"
+rust-version = "1.72"
+
+[features]
+default = ["std"]
+std = []
+
+[dev-dependencies]
+serde_json = "1.0"
+
+[dependencies]
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
